@@ -3,6 +3,8 @@ package dev.supergooey.rewind
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Process
 import android.provider.Settings
@@ -10,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -33,8 +37,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import dev.supergooey.rewind.ui.theme.RewindTheme
 import java.time.Duration
@@ -73,6 +80,20 @@ class MainActivity : ComponentActivity() {
         return mode == AppOpsManager.MODE_ALLOWED
       }
 
+
+      fun getNonSystemAppsList(): Map<String, ImageBitmap> {
+        val appInfos = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+        val appInfoMap = mutableMapOf<String, ImageBitmap>()
+        for (appInfo in appInfos) {
+          if (appInfo.flags != ApplicationInfo.FLAG_SYSTEM) {
+            val icon = appInfo.loadIcon(packageManager)
+            val bitmap = icon.toBitmap().asImageBitmap()
+            appInfoMap[appInfo.packageName] = bitmap
+          }
+        }
+        return appInfoMap
+      }
+
       var granted by remember { mutableStateOf(checkUsageStatsPermission()) }
       val usageIntent = remember { Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS) }
       val permissionLauncher = rememberLauncherForActivityResult(
@@ -104,21 +125,36 @@ class MainActivity : ComponentActivity() {
           endMillis
         )
 
-        val scrollState = rememberScrollState()
-        Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState)) {
-          usageMap.filterValues { it.totalTimeInForeground > 0 }.forEach { (packageName, stats) ->
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .height(20.dp),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              Text(packageName, color = Color.White)
-              Text("${Duration.ofMillis(stats.totalTimeInForeground).seconds} s", color = Color.White)
+        val userApps = getNonSystemAppsList()
 
+        val scrollState = rememberScrollState()
+        Column(
+          modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+        ) {
+          usageMap.filterKeys { userApps.containsKey(it) }
+            .filterValues { it.totalTimeInForeground > 0 }.forEach { (packageName, stats) ->
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                val bitmap = userApps[packageName]!!
+                Image(
+                  modifier = Modifier.size(24.dp),
+                  bitmap = bitmap,
+                  contentDescription = packageName
+                )
+                Text(packageName, color = Color.White)
+                Text(
+                  "${Duration.ofMillis(stats.totalTimeInForeground).seconds} s",
+                  color = Color.White
+                )
+              }
             }
-          }
         }
       } else {
         LaunchedEffect(Unit) {
