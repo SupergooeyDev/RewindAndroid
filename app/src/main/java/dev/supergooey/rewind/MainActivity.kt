@@ -1,6 +1,9 @@
 package dev.supergooey.rewind
 
 import android.app.AppOpsManager
+import android.app.usage.UsageEvents
+import android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED
+import android.app.usage.UsageEvents.Event.USER_INTERACTION
 import android.app.usage.UsageStatsManager
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -21,10 +24,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -41,10 +45,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import dev.supergooey.rewind.ui.theme.RewindTheme
-import java.time.Duration
 import java.util.Calendar
 
 class MainActivity : ComponentActivity() {
@@ -60,7 +64,6 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-
   @Composable
   fun App() {
     Box(
@@ -69,9 +72,9 @@ class MainActivity : ComponentActivity() {
         .background(color = Color.Black)
         .windowInsetsPadding(WindowInsets.statusBars)
     ) {
+
       fun checkUsageStatsPermission(): Boolean {
         val appOpsManager = getSystemService(APP_OPS_SERVICE) as AppOpsManager
-        // `AppOpsManager.checkOpNoThrow` is deprecated from Android Q
         val mode =
           appOpsManager.unsafeCheckOpNoThrow(
             "android:get_usage_stats",
@@ -80,15 +83,18 @@ class MainActivity : ComponentActivity() {
         return mode == AppOpsManager.MODE_ALLOWED
       }
 
-
-      fun getNonSystemAppsList(): Map<String, ImageBitmap> {
+      fun getNonSystemAppsList(): Map<String, AppEvent> {
         val appInfos = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-        val appInfoMap = mutableMapOf<String, ImageBitmap>()
+        val appInfoMap = mutableMapOf<String, AppEvent>()
         for (appInfo in appInfos) {
           if (appInfo.flags != ApplicationInfo.FLAG_SYSTEM) {
-            val icon = appInfo.loadIcon(packageManager)
-            val bitmap = icon.toBitmap().asImageBitmap()
-            appInfoMap[appInfo.packageName] = bitmap
+            val packageName = appInfo.packageName
+            val label = appInfo.loadLabel(packageManager).toString()
+            if (label.contains("launcher", ignoreCase = true)) {
+              continue
+            }
+            val bitmap = appInfo.loadIcon(packageManager).toBitmap().asImageBitmap()
+            appInfoMap[appInfo.packageName] = AppEvent(packageName, label, bitmap)
           }
         }
         return appInfoMap
@@ -120,41 +126,56 @@ class MainActivity : ComponentActivity() {
         }
         val endMillis = calendar.timeInMillis
 
-        val usageMap = usageStatsManager.queryAndAggregateUsageStats(
-          startMillis,
-          endMillis
-        )
-
         val userApps = getNonSystemAppsList()
+
+        val usageMap = usageStatsManager.queryAndAggregateUsageStats(startMillis, endMillis)
+          .filterKeys { userApps.containsKey(it) }
+          .filterValues { it.totalTimeInForeground > 0L }
+
+        val events = usageStatsManager.queryEvents(startMillis, endMillis)
+        val event = UsageEvents.Event()
+        val timeline = mutableListOf<AppEvent>()
+
+        while (events.hasNextEvent()) {
+          events.getNextEvent(event)
+          val validEvents = event.eventType == ACTIVITY_RESUMED
+          if (validEvents && usageMap.containsKey(event.packageName)) {
+            when {
+              timeline.isEmpty() -> {
+                timeline.add(userApps[event.packageName]!!)
+              }
+
+              timeline.last().packageName != event.packageName -> {
+                timeline.add(userApps[event.packageName]!!)
+              }
+            }
+          }
+        }
 
         val scrollState = rememberScrollState()
         Column(
           modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(scrollState)
+            .verticalScroll(scrollState),
+          verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          usageMap.filterKeys { userApps.containsKey(it) }
-            .filterValues { it.totalTimeInForeground > 0 }.forEach { (packageName, stats) ->
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .height(20.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-              ) {
-                val bitmap = userApps[packageName]!!
-                Image(
-                  modifier = Modifier.size(24.dp),
-                  bitmap = bitmap,
-                  contentDescription = packageName
-                )
-                Text(packageName, color = Color.White)
-                Text(
-                  "${Duration.ofMillis(stats.totalTimeInForeground).seconds} s",
-                  color = Color.White
-                )
-              }
+          timeline.forEach { appEvent ->
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight()
+                .padding(horizontal = 16.dp),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Image(
+                modifier = Modifier.size(24.dp),
+                bitmap = appEvent.icon,
+                contentDescription = appEvent.label
+              )
+              Text(appEvent.label, color = Color.White, fontSize = 16.sp)
             }
+          }
         }
       } else {
         LaunchedEffect(Unit) {
@@ -164,3 +185,9 @@ class MainActivity : ComponentActivity() {
     }
   }
 }
+
+data class AppEvent(
+  val packageName: String,
+  val label: String,
+  val icon: ImageBitmap,
+)
