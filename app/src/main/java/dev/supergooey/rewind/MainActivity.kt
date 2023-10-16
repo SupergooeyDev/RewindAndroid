@@ -3,7 +3,6 @@ package dev.supergooey.rewind
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED
-import android.app.usage.UsageEvents.Event.USER_INTERACTION
 import android.app.usage.UsageStatsManager
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -21,13 +20,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -49,7 +51,14 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import dev.supergooey.rewind.ui.theme.RewindTheme
+import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.ZoneId
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,7 +79,6 @@ class MainActivity : ComponentActivity() {
       modifier = Modifier
         .fillMaxSize()
         .background(color = Color.Black)
-        .windowInsetsPadding(WindowInsets.statusBars)
     ) {
 
       fun checkUsageStatsPermission(): Boolean {
@@ -111,20 +119,10 @@ class MainActivity : ComponentActivity() {
       if (granted) {
         val context = LocalContext.current
         val usageStatsManager = remember { context.getSystemService(UsageStatsManager::class.java) }
-        val calendar = Calendar.getInstance().apply {
-          set(Calendar.HOUR, 0)
-          set(Calendar.MINUTE, 0)
-          set(Calendar.SECOND, 0)
-          set(Calendar.MILLISECOND, 0)
-        }
-        val startMillis = calendar.timeInMillis
-        with(calendar) {
-          set(Calendar.HOUR, 23)
-          set(Calendar.MINUTE, 59)
-          set(Calendar.SECOND, 59)
-          set(Calendar.MILLISECOND, 999)
-        }
-        val endMillis = calendar.timeInMillis
+        val startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIDNIGHT)
+        val startMillis = startOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX)
+        val endMillis = endOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
         val userApps = getNonSystemAppsList()
 
@@ -134,7 +132,7 @@ class MainActivity : ComponentActivity() {
 
         val events = usageStatsManager.queryEvents(startMillis, endMillis)
         val event = UsageEvents.Event()
-        val timeline = mutableListOf<AppEvent>()
+        val timeline = mutableListOf<TimelineEvent>()
 
         while (events.hasNextEvent()) {
           events.getNextEvent(event)
@@ -142,11 +140,21 @@ class MainActivity : ComponentActivity() {
           if (validEvents && usageMap.containsKey(event.packageName)) {
             when {
               timeline.isEmpty() -> {
-                timeline.add(userApps[event.packageName]!!)
+                timeline.add(
+                  TimelineEvent(
+                    event = userApps[event.packageName]!!,
+                    timestamp = Date(event.timeStamp)
+                  )
+                )
               }
 
-              timeline.last().packageName != event.packageName -> {
-                timeline.add(userApps[event.packageName]!!)
+              timeline.last().event.packageName != event.packageName -> {
+                timeline.add(
+                  TimelineEvent(
+                    event = userApps[event.packageName]!!,
+                    timestamp = Date(event.timeStamp)
+                  )
+                )
               }
             }
           }
@@ -159,23 +167,26 @@ class MainActivity : ComponentActivity() {
             .verticalScroll(scrollState),
           verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          timeline.forEach { appEvent ->
+          Spacer(modifier = Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
+          timeline.forEach { timelineEvent ->
             Row(
               modifier = Modifier
                 .fillMaxWidth()
                 .wrapContentHeight()
                 .padding(horizontal = 16.dp),
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
               Image(
                 modifier = Modifier.size(24.dp),
-                bitmap = appEvent.icon,
-                contentDescription = appEvent.label
+                bitmap = timelineEvent.event.icon,
+                contentDescription = timelineEvent.event.label
               )
-              Text(appEvent.label, color = Color.White, fontSize = 16.sp)
+              Text(timelineEvent.event.label, color = Color.White, fontSize = 16.sp)
+              Text(dateFormatter.format(timelineEvent.timestamp), color = Color.White, fontSize = 16.sp)
             }
           }
+          Spacer(modifier = Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
         }
       } else {
         LaunchedEffect(Unit) {
@@ -191,3 +202,10 @@ data class AppEvent(
   val label: String,
   val icon: ImageBitmap,
 )
+
+data class TimelineEvent(
+  val event: AppEvent,
+  val timestamp: Date
+)
+
+val dateFormatter = SimpleDateFormat("hh:mm a", Locale.US)

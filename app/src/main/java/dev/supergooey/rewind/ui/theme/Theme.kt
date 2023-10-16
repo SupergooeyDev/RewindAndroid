@@ -1,6 +1,7 @@
 package dev.supergooey.rewind.ui.theme
 
 import android.app.Activity
+import android.graphics.Color.toArgb
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -50,7 +51,7 @@ fun RewindTheme(
   if (!view.isInEditMode) {
     SideEffect {
       val window = (view.context as Activity).window
-      window.statusBarColor = Color.Transparent.toArgb()
+      window.statusBarColor = Color(0f, 0f, 0f, 0.7f).toArgb()
       WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
     }
   }
