@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -36,10 +37,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,15 +50,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import dev.supergooey.rewind.ui.theme.RewindTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,91 +84,31 @@ class MainActivity : ComponentActivity() {
 
   @Composable
   fun App() {
+    val appContext = LocalContext.current.applicationContext
+    val model = viewModels<AppViewModel> {
+      AppViewModelFactory(
+        appContext.getSystemService(AppOpsManager::class.java),
+        appContext.packageManager,
+        appContext.getSystemService(UsageStatsManager::class.java),
+        packageName
+      )
+    }
+    val state by model.value.state().collectAsState()
+
+    val usageIntent = remember { Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+      model.value.updatePermission(true)
+    }
+
     Box(
       modifier = Modifier
         .fillMaxSize()
         .background(color = Color.Black)
     ) {
 
-      fun checkUsageStatsPermission(): Boolean {
-        val appOpsManager = getSystemService(APP_OPS_SERVICE) as AppOpsManager
-        val mode =
-          appOpsManager.unsafeCheckOpNoThrow(
-            "android:get_usage_stats",
-            Process.myUid(), packageName
-          )
-        return mode == AppOpsManager.MODE_ALLOWED
-      }
-
-      fun getNonSystemAppsList(): Map<String, AppEvent> {
-        val appInfos = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-        val appInfoMap = mutableMapOf<String, AppEvent>()
-        for (appInfo in appInfos) {
-          if (appInfo.flags != ApplicationInfo.FLAG_SYSTEM) {
-            val packageName = appInfo.packageName
-            val label = appInfo.loadLabel(packageManager).toString()
-            if (label.contains("launcher", ignoreCase = true)) {
-              continue
-            }
-            val bitmap = appInfo.loadIcon(packageManager).toBitmap().asImageBitmap()
-            appInfoMap[appInfo.packageName] = AppEvent(packageName, label, bitmap)
-          }
-        }
-        return appInfoMap
-      }
-
-      var granted by remember { mutableStateOf(checkUsageStatsPermission()) }
-      val usageIntent = remember { Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS) }
-      val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-      ) {
-        granted = true
-      }
-
-      if (granted) {
-        val context = LocalContext.current
-        val usageStatsManager = remember { context.getSystemService(UsageStatsManager::class.java) }
-        val startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIDNIGHT)
-        val startMillis = startOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX)
-        val endMillis = endOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-
-        val userApps = getNonSystemAppsList()
-
-        val usageMap = usageStatsManager.queryAndAggregateUsageStats(startMillis, endMillis)
-          .filterKeys { userApps.containsKey(it) }
-          .filterValues { it.totalTimeInForeground > 0L }
-
-        val events = usageStatsManager.queryEvents(startMillis, endMillis)
-        val event = UsageEvents.Event()
-        val timeline = mutableListOf<TimelineEvent>()
-
-        while (events.hasNextEvent()) {
-          events.getNextEvent(event)
-          val validEvents = event.eventType == ACTIVITY_RESUMED
-          if (validEvents && usageMap.containsKey(event.packageName)) {
-            when {
-              timeline.isEmpty() -> {
-                timeline.add(
-                  TimelineEvent(
-                    event = userApps[event.packageName]!!,
-                    timestamp = Date(event.timeStamp)
-                  )
-                )
-              }
-
-              timeline.last().event.packageName != event.packageName -> {
-                timeline.add(
-                  TimelineEvent(
-                    event = userApps[event.packageName]!!,
-                    timestamp = Date(event.timeStamp)
-                  )
-                )
-              }
-            }
-          }
-        }
-
+      if (state.usagePermissionGranted) {
         val scrollState = rememberScrollState()
         Column(
           modifier = Modifier
@@ -168,7 +117,7 @@ class MainActivity : ComponentActivity() {
           verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
           Spacer(modifier = Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
-          timeline.forEach { timelineEvent ->
+          state.timeline.forEach { timelineEvent ->
             Row(
               modifier = Modifier
                 .fillMaxWidth()
@@ -183,7 +132,11 @@ class MainActivity : ComponentActivity() {
                 contentDescription = timelineEvent.event.label
               )
               Text(timelineEvent.event.label, color = Color.White, fontSize = 16.sp)
-              Text(dateFormatter.format(timelineEvent.timestamp), color = Color.White, fontSize = 16.sp)
+              Text(
+                dateFormatter.format(timelineEvent.startTimestamp),
+                color = Color.White,
+                fontSize = 16.sp
+              )
             }
           }
           Spacer(modifier = Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
@@ -197,6 +150,131 @@ class MainActivity : ComponentActivity() {
   }
 }
 
+class AppViewModel(
+  private val appOpsManager: AppOpsManager,
+  private val packageManager: PackageManager,
+  private val usageStatsManager: UsageStatsManager,
+  private val packageName: String
+) : ViewModel() {
+
+  private val internalState = MutableStateFlow(AppState())
+
+  init {
+    val permissionState = checkUsageStatsPermission()
+    internalState.value = AppState(
+      usagePermissionGranted = permissionState
+    )
+    if (permissionState) {
+      viewModelScope.launch(Dispatchers.IO) {
+        val installedApps = getNonSystemAppsList()
+        val timeline = loadEvents(installedApps)
+        internalState.value = internalState.value.copy(timeline = timeline)
+      }
+    }
+  }
+
+  private fun checkUsageStatsPermission(): Boolean {
+    val mode = appOpsManager.unsafeCheckOpNoThrow(
+      "android:get_usage_stats",
+      Process.myUid(),
+      packageName
+    )
+    return mode == AppOpsManager.MODE_ALLOWED
+  }
+
+  private suspend fun getNonSystemAppsList(): Map<String, AppEvent> = suspendCoroutine { cont ->
+    val appInfos = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+    val map = mutableMapOf<String, AppEvent>()
+    for (appInfo in appInfos) {
+      if (appInfo.flags != ApplicationInfo.FLAG_SYSTEM) {
+        val packageName = appInfo.packageName
+        val label = appInfo.loadLabel(packageManager).toString()
+        if (label.contains("launcher", ignoreCase = true)) {
+          continue
+        }
+        val bitmap = appInfo.loadIcon(packageManager).toBitmap().asImageBitmap()
+        map[appInfo.packageName] = AppEvent(packageName, label, bitmap)
+      }
+    }
+    cont.resume(map)
+  }
+
+  fun updatePermission(granted: Boolean) {
+    internalState.value = internalState.value.copy(
+      usagePermissionGranted = granted
+    )
+  }
+
+  private suspend fun loadEvents(installedApps: Map<String, AppEvent>): List<TimelineEvent> =
+    suspendCoroutine { cont ->
+      val startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIDNIGHT)
+      val startMillis = startOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+      val endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX)
+      val endMillis = endOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+      val usageMap = usageStatsManager.queryAndAggregateUsageStats(startMillis, endMillis)
+        .filterKeys { installedApps.containsKey(it) }
+        .filterValues { it.totalTimeInForeground > 0L }
+
+      val events = usageStatsManager.queryEvents(startMillis, endMillis)
+      val event = UsageEvents.Event()
+      val timeline = mutableListOf<TimelineEvent>()
+
+      while (events.hasNextEvent()) {
+        events.getNextEvent(event)
+        val validEvents = event.eventType == ACTIVITY_RESUMED
+        if (validEvents && usageMap.containsKey(event.packageName)) {
+          when {
+            timeline.isEmpty() -> {
+              timeline.add(
+                TimelineEvent(
+                  event = installedApps[event.packageName]!!,
+                  startTimestamp = Date(event.timeStamp)
+                )
+              )
+            }
+
+            timeline.last().event.packageName != event.packageName -> {
+              timeline.add(
+                TimelineEvent(
+                  event = installedApps[event.packageName]!!,
+                  startTimestamp = Date(event.timeStamp)
+                )
+              )
+            }
+          }
+        }
+      }
+      cont.resume(timeline)
+    }
+
+  fun state(): StateFlow<AppState> {
+    return internalState.asStateFlow()
+  }
+}
+
+@Suppress("UNCHECKED_CAST")
+class AppViewModelFactory(
+  private val appOpsManager: AppOpsManager,
+  private val packageManager: PackageManager,
+  private val usageStatsManager: UsageStatsManager,
+  private val packageName: String
+) : ViewModelProvider.NewInstanceFactory() {
+  override fun <T : ViewModel> create(modelClass: Class<T>): T {
+    return AppViewModel(
+      appOpsManager,
+      packageManager,
+      usageStatsManager,
+      packageName
+    ) as T
+  }
+}
+
+data class AppState(
+  val usagePermissionGranted: Boolean = false,
+  val timeline: List<TimelineEvent> = emptyList()
+)
+
 data class AppEvent(
   val packageName: String,
   val label: String,
@@ -205,7 +283,7 @@ data class AppEvent(
 
 data class TimelineEvent(
   val event: AppEvent,
-  val timestamp: Date
+  val startTimestamp: Date,
 )
 
 val dateFormatter = SimpleDateFormat("hh:mm a", Locale.US)
