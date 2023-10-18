@@ -2,6 +2,7 @@ package dev.supergooey.rewind
 
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
+import android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED
 import android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED
 import android.app.usage.UsageStatsManager
 import android.content.Intent
@@ -15,8 +16,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.annotation.ColorInt
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,14 +28,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,7 +52,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,6 +63,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.palette.graphics.Palette
 import dev.supergooey.rewind.ui.theme.RewindTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -110,36 +121,53 @@ class MainActivity : ComponentActivity() {
 
       if (state.usagePermissionGranted) {
         val scrollState = rememberScrollState()
-        Column(
+        Row(
           modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(scrollState),
-          verticalArrangement = Arrangement.spacedBy(8.dp)
+            .horizontalScroll(scrollState),
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          Spacer(modifier = Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
           state.timeline.forEach { timelineEvent ->
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .wrapContentHeight()
-                .padding(horizontal = 16.dp),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
+//            Row(
+//              modifier = Modifier
+//                .fillMaxWidth()
+//                .wrapContentHeight()
+//                .padding(horizontal = 16.dp),
+//              horizontalArrangement = Arrangement.SpaceBetween,
+//              verticalAlignment = Alignment.CenterVertically
+//            ) {
+//              Image(
+//                modifier = Modifier.size(24.dp),
+//                bitmap = timelineEvent.event.icon,
+//                contentDescription = timelineEvent.event.label
+//              )
+//              Text(timelineEvent.event.label, color = Color.White, fontSize = 16.sp)
+//              Text(
+//                dateFormatter.format(timelineEvent.startTimestamp),
+//                color = Color.White,
+//                fontSize = 16.sp
+//              )
+//            }
+            Box(
+              modifier = Modifier.wrapContentSize(),
+              contentAlignment = Alignment.Center
             ) {
+              Box(
+                modifier = Modifier
+                  .width(100.dp * (1..3).random())
+                  .height(12.dp)
+                  .background(
+                    color = Color(timelineEvent.event.backgroundColor),
+                    shape = CircleShape
+                  )
+              )
               Image(
                 modifier = Modifier.size(24.dp),
                 bitmap = timelineEvent.event.icon,
                 contentDescription = timelineEvent.event.label
               )
-              Text(timelineEvent.event.label, color = Color.White, fontSize = 16.sp)
-              Text(
-                dateFormatter.format(timelineEvent.startTimestamp),
-                color = Color.White,
-                fontSize = 16.sp
-              )
             }
           }
-          Spacer(modifier = Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
         }
       } else {
         LaunchedEffect(Unit) {
@@ -192,8 +220,11 @@ class AppViewModel(
         if (label.contains("launcher", ignoreCase = true)) {
           continue
         }
-        val bitmap = appInfo.loadIcon(packageManager).toBitmap().asImageBitmap()
-        map[appInfo.packageName] = AppEvent(packageName, label, bitmap)
+        val bitmap = appInfo.loadIcon(packageManager).toBitmap()
+        val colors = Palette.from(bitmap).generate()
+        val dominantColor = colors.getDominantColor(Color.Gray.toArgb())
+        map[appInfo.packageName] =
+          AppEvent(packageName, label, bitmap.asImageBitmap(), dominantColor)
       }
     }
     cont.resume(map)
@@ -279,6 +310,7 @@ data class AppEvent(
   val packageName: String,
   val label: String,
   val icon: ImageBitmap,
+  @ColorInt val backgroundColor: Int
 )
 
 data class TimelineEvent(
