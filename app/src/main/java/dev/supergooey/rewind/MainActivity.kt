@@ -2,7 +2,6 @@ package dev.supergooey.rewind
 
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
-import android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED
 import android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED
 import android.app.usage.UsageStatsManager
 import android.content.Intent
@@ -11,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Process
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -20,29 +20,15 @@ import androidx.annotation.ColorInt
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsBottomHeight
-import androidx.compose.foundation.layout.windowInsetsTopHeight
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -52,18 +38,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.palette.graphics.Palette
+import dev.supergooey.rewind.Dates.endMillis
+import dev.supergooey.rewind.Dates.startMillis
 import dev.supergooey.rewind.ui.theme.RewindTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,6 +65,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
+import kotlin.time.Duration.Companion.milliseconds
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -127,44 +114,27 @@ class MainActivity : ComponentActivity() {
             .horizontalScroll(scrollState),
           verticalAlignment = Alignment.CenterVertically
         ) {
-          state.timeline.forEach { timelineEvent ->
-//            Row(
-//              modifier = Modifier
-//                .fillMaxWidth()
-//                .wrapContentHeight()
-//                .padding(horizontal = 16.dp),
-//              horizontalArrangement = Arrangement.SpaceBetween,
-//              verticalAlignment = Alignment.CenterVertically
-//            ) {
-//              Image(
-//                modifier = Modifier.size(24.dp),
-//                bitmap = timelineEvent.event.icon,
-//                contentDescription = timelineEvent.event.label
-//              )
-//              Text(timelineEvent.event.label, color = Color.White, fontSize = 16.sp)
-//              Text(
-//                dateFormatter.format(timelineEvent.startTimestamp),
-//                color = Color.White,
-//                fontSize = 16.sp
-//              )
-//            }
+          state.timeline.sessions.forEach { session ->
+            val seconds = session.duration.inWholeSeconds
+            val barWidth = maxOf(100, seconds).toInt()
+            Log.d("Session Timeline", "${session.start.app.label} : $seconds")
             Box(
               modifier = Modifier.wrapContentSize(),
               contentAlignment = Alignment.Center
             ) {
               Box(
                 modifier = Modifier
-                  .width(100.dp * (1..3).random())
+                  .width(barWidth.dp)
                   .height(12.dp)
                   .background(
-                    color = Color(timelineEvent.event.backgroundColor),
+                    color = Color(session.start.app.backgroundColor),
                     shape = CircleShape
                   )
               )
               Image(
                 modifier = Modifier.size(24.dp),
-                bitmap = timelineEvent.event.icon,
-                contentDescription = timelineEvent.event.label
+                bitmap = session.start.app.icon,
+                contentDescription = session.start.app.label
               )
             }
           }
@@ -185,18 +155,18 @@ class AppViewModel(
   private val packageName: String
 ) : ViewModel() {
 
-  private val internalState = MutableStateFlow(AppState())
+  private val state = MutableStateFlow(AppState())
 
   init {
     val permissionState = checkUsageStatsPermission()
-    internalState.value = AppState(
+    state.value = AppState(
       usagePermissionGranted = permissionState
     )
     if (permissionState) {
       viewModelScope.launch(Dispatchers.IO) {
-        val installedApps = getNonSystemAppsList()
-        val timeline = loadEvents(installedApps)
-        internalState.value = internalState.value.copy(timeline = timeline)
+        val apps = appsByPackage()
+        val timeline = loadEvents(apps)
+        state.value = state.value.copy(timeline = timeline)
       }
     }
   }
@@ -210,77 +180,94 @@ class AppViewModel(
     return mode == AppOpsManager.MODE_ALLOWED
   }
 
-  private suspend fun getNonSystemAppsList(): Map<String, AppEvent> = suspendCoroutine { cont ->
-    val appInfos = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-    val map = mutableMapOf<String, AppEvent>()
-    for (appInfo in appInfos) {
-      if (appInfo.flags != ApplicationInfo.FLAG_SYSTEM) {
-        val packageName = appInfo.packageName
-        val label = appInfo.loadLabel(packageManager).toString()
-        if (label.contains("launcher", ignoreCase = true)) {
-          continue
-        }
-        val bitmap = appInfo.loadIcon(packageManager).toBitmap()
+  private suspend fun appsByPackage() = suspendCoroutine { cont ->
+    val apps = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+    val map = apps
+      .filter {
+        it.flags != ApplicationInfo.FLAG_SYSTEM
+      }.associate { app ->
+        val packageName = app.packageName
+        val label = app.loadLabel(packageManager).toString()
+        val bitmap = app.loadIcon(packageManager).toBitmap()
         val colors = Palette.from(bitmap).generate()
         val dominantColor = colors.getDominantColor(Color.Gray.toArgb())
-        map[appInfo.packageName] =
-          AppEvent(packageName, label, bitmap.asImageBitmap(), dominantColor)
+        packageName to InstalledApp(
+          packageName = packageName,
+          label = label,
+          icon = bitmap.asImageBitmap(),
+          backgroundColor = dominantColor
+        )
       }
-    }
     cont.resume(map)
   }
 
+  private suspend fun loadEvents(appsByPackage: Map<String, InstalledApp>): AppTimeline {
+    return suspendCoroutine { cont ->
+
+      val events = usageStatsManager.queryEvents(startMillis, endMillis)
+      val event = UsageEvents.Event()
+      val appSessions = mutableListOf<AppSession>()
+      val appEvents = mutableListOf<AppEvent>()
+      var totalDuration = 0L
+
+      while (events.hasNextEvent()) {
+        events.getNextEvent(event)
+
+        if (!appsByPackage.containsKey(event.packageName) || event.eventType != ACTIVITY_RESUMED) continue
+        /*
+        * Core Logic
+        * If we have no events, add the App Event
+        * If we get to an event that is different from the last event, construct a AppSession using those two events
+        *
+        */
+        val appEvent = AppEvent(
+          appsByPackage.getValue(event.packageName),
+          Date(event.timeStamp),
+          event.eventType
+        )
+
+        when {
+          appEvents.isEmpty() -> {
+            Log.d("Events", "Adding initial event: ${appEvent.app.packageName}")
+            appEvents.add(appEvent)
+          }
+
+          appEvents.last().app.packageName != appEvent.app.packageName -> {
+            val startEvent = appEvents.removeLast()
+            val endEvent = startEvent.copy(timestamp = appEvent.timestamp)
+            Log.d(
+              "Events",
+              "Session Finished for ${startEvent.app.packageName}, and starting for ${appEvent.app.packageName}"
+            )
+            val session = AppSession(
+              start = startEvent,
+              end = endEvent
+            )
+            appSessions.add(session)
+            appEvents.add(appEvent)
+            totalDuration += session.duration.inWholeSeconds
+          }
+        }
+      }
+
+      cont.resume(
+        AppTimeline(
+          appSessions,
+          totalDuration
+        )
+      )
+    }
+  }
+
   fun updatePermission(granted: Boolean) {
-    internalState.value = internalState.value.copy(
+    state.value = state.value.copy(
       usagePermissionGranted = granted
     )
   }
 
-  private suspend fun loadEvents(installedApps: Map<String, AppEvent>): List<TimelineEvent> =
-    suspendCoroutine { cont ->
-      val startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIDNIGHT)
-      val startMillis = startOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-      val endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX)
-      val endMillis = endOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-
-      val usageMap = usageStatsManager.queryAndAggregateUsageStats(startMillis, endMillis)
-        .filterKeys { installedApps.containsKey(it) }
-        .filterValues { it.totalTimeInForeground > 0L }
-
-      val events = usageStatsManager.queryEvents(startMillis, endMillis)
-      val event = UsageEvents.Event()
-      val timeline = mutableListOf<TimelineEvent>()
-
-      while (events.hasNextEvent()) {
-        events.getNextEvent(event)
-        val validEvents = event.eventType == ACTIVITY_RESUMED
-        if (validEvents && usageMap.containsKey(event.packageName)) {
-          when {
-            timeline.isEmpty() -> {
-              timeline.add(
-                TimelineEvent(
-                  event = installedApps[event.packageName]!!,
-                  startTimestamp = Date(event.timeStamp)
-                )
-              )
-            }
-
-            timeline.last().event.packageName != event.packageName -> {
-              timeline.add(
-                TimelineEvent(
-                  event = installedApps[event.packageName]!!,
-                  startTimestamp = Date(event.timeStamp)
-                )
-              )
-            }
-          }
-        }
-      }
-      cont.resume(timeline)
-    }
 
   fun state(): StateFlow<AppState> {
-    return internalState.asStateFlow()
+    return state.asStateFlow()
   }
 }
 
@@ -303,19 +290,41 @@ class AppViewModelFactory(
 
 data class AppState(
   val usagePermissionGranted: Boolean = false,
-  val timeline: List<TimelineEvent> = emptyList()
+  val timeline: AppTimeline = AppTimeline()
 )
 
-data class AppEvent(
+data class InstalledApp(
   val packageName: String,
   val label: String,
   val icon: ImageBitmap,
   @ColorInt val backgroundColor: Int
 )
 
-data class TimelineEvent(
-  val event: AppEvent,
-  val startTimestamp: Date,
+data class AppEvent(
+  val app: InstalledApp,
+  val timestamp: Date,
+  val type: Int
 )
 
-val dateFormatter = SimpleDateFormat("hh:mm a", Locale.US)
+data class AppSession(
+  val start: AppEvent,
+  val end: AppEvent
+) {
+  val duration = (end.timestamp.time - start.timestamp.time).milliseconds
+}
+
+data class AppTimeline(
+  val sessions: List<AppSession> = emptyList(),
+  val totalDuration: Long = 0L
+)
+
+
+object Dates {
+  private val startOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MIDNIGHT)
+  val startMillis = startOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+  private val endOfDay = LocalDateTime.of(LocalDate.now(), LocalTime.MAX)
+  val endMillis = endOfDay.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+  val dateFormatter = SimpleDateFormat("hh:mm a", Locale.US)
+}
