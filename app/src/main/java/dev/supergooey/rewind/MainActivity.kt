@@ -23,17 +23,20 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -53,6 +56,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
@@ -61,9 +65,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.palette.graphics.Palette
 import dev.supergooey.rewind.Dates.endMillis
 import dev.supergooey.rewind.Dates.startMillis
-import dev.supergooey.rewind.ui.theme.Purple40
-import dev.supergooey.rewind.ui.theme.PurpleGrey40
-import dev.supergooey.rewind.ui.theme.PurpleGrey80
+import dev.supergooey.rewind.ui.theme.Granite
 import dev.supergooey.rewind.ui.theme.RewindTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -114,81 +116,101 @@ class MainActivity : ComponentActivity() {
       model.value.updatePermission(true)
     }
 
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .background(color = PurpleGrey40)
-    ) {
-
-      if (state.usagePermissionGranted) {
-        val listState = rememberLazyListState()
-        LazyRow(
-          modifier = Modifier
-            .fillMaxSize()
-            .onSizeChanged { screenWidth = it.width.toFloat() },
-          state = listState,
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          items(state.timeline.sessions) { session ->
-            val seconds = session.duration.inWholeSeconds
-            var focused by remember { mutableStateOf(false) }
-            val barWidth = maxOf(50, seconds).toInt()
-            val barHeight by animateDpAsState(
-              targetValue = if (focused) 24.dp else 12.dp,
-              animationSpec = spring(
-                dampingRatio = Spring.DampingRatioMediumBouncy,
-                stiffness = Spring.StiffnessMedium
-              ),
-              label = "Selected Bar Height"
-            )
-            Box(
-              modifier = Modifier
-                .wrapContentSize()
-                .onGloballyPositioned { coords ->
-                  val center = screenWidth / 2f
-                  val bounds = coords.boundsInParent()
-                  val right = bounds.right
-                  val left = bounds.left
-                  focused = right > center && left < center
-                },
-              contentAlignment = Alignment.Center
-            ) {
-              Box(
-                modifier = Modifier
-                  .width(barWidth.dp)
-                  .height(barHeight)
-                  .background(
-                    color = Color(session.start.app.backgroundColor),
-                    shape = CircleShape
-                  )
-              )
-              Image(
-                modifier = Modifier.size(24.dp),
-                bitmap = session.start.app.icon,
-                contentDescription = session.start.app.label
-              )
-            }
-          }
-          item {
-            Box(modifier = Modifier.fillParentMaxWidth(0.5f))
-          }
-        }
+    if (state.usagePermissionGranted) {
+      val listState = rememberLazyListState()
+      var selectedApp by remember { mutableStateOf("") }
+      var selectedAppDuration by remember { mutableStateOf("") }
+      Column(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(color = Granite)
+          .padding(bottom = 32.dp),
+      ) {
         Box(
           modifier = Modifier
-            .width(2.dp)
-            .height(80.dp)
-            .background(color = Color.White, shape = CircleShape)
-            .align(Alignment.Center)
-        )
-        LaunchedEffect(key1 = state.timeline.sessions) {
-          if (state.timeline.sessions.isNotEmpty()) {
-            listState.scrollToItem(state.timeline.sessions.lastIndex)
+            .fillMaxWidth()
+            .weight(1f),
+          contentAlignment = Alignment.Center
+        ) {
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(selectedApp, color = Color.White, fontSize = 24.sp)
+            Text(selectedAppDuration, color = Color.White, fontSize = 16.sp)
           }
         }
-      } else {
-        LaunchedEffect(Unit) {
-          permissionLauncher.launch(usageIntent)
+        Box(contentAlignment = Alignment.Center) {
+          LazyRow(
+            modifier = Modifier
+              .fillMaxWidth()
+              .wrapContentHeight()
+              .onSizeChanged { screenWidth = it.width.toFloat() },
+            state = listState,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            items(state.timeline.sessions) { session ->
+              val seconds = session.duration.inWholeSeconds
+              var focused by remember { mutableStateOf(false) }
+              if (focused) {
+                selectedApp = session.start.app.label
+                selectedAppDuration = "${session.duration.inWholeSeconds / 60}m ${session.duration.inWholeSeconds % 60}s"
+              }
+              val barWidth = maxOf(50, seconds).toInt()
+              val barHeight by animateDpAsState(
+                targetValue = if (focused) 24.dp else 12.dp,
+                animationSpec = spring(
+                  dampingRatio = Spring.DampingRatioMediumBouncy,
+                  stiffness = Spring.StiffnessLow
+                ),
+                label = "Selected Bar Height"
+              )
+              Box(
+                modifier = Modifier
+                  .wrapContentSize()
+                  .onGloballyPositioned { coords ->
+                    val center = screenWidth / 2f
+                    val bounds = coords.boundsInParent()
+                    val right = bounds.right
+                    val left = bounds.left
+                    focused = right > center && left < center
+                  },
+                contentAlignment = Alignment.Center
+              ) {
+                Box(
+                  modifier = Modifier
+                    .width(barWidth.dp)
+                    .height(barHeight)
+                    .background(
+                      color = Color(session.start.app.backgroundColor),
+                      shape = CircleShape
+                    )
+                )
+                Image(
+                  modifier = Modifier.size(24.dp),
+                  bitmap = session.start.app.icon,
+                  contentDescription = session.start.app.label
+                )
+              }
+            }
+            item {
+              Box(modifier = Modifier.fillParentMaxWidth(0.5f))
+            }
+          }
+          Box(
+            modifier = Modifier
+              .width(2.dp)
+              .height(80.dp)
+              .background(color = Color.White, shape = CircleShape)
+              .align(Alignment.Center)
+          )
+          LaunchedEffect(key1 = state.timeline.sessions) {
+            if (state.timeline.sessions.isNotEmpty()) {
+              listState.scrollToItem(state.timeline.sessions.lastIndex)
+            }
+          }
         }
+      }
+    } else {
+      LaunchedEffect(Unit) {
+        permissionLauncher.launch(usageIntent)
       }
     }
   }
