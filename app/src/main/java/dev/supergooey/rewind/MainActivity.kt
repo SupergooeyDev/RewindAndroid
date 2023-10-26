@@ -17,29 +17,40 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.ColorInt
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
@@ -50,6 +61,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.palette.graphics.Palette
 import dev.supergooey.rewind.Dates.endMillis
 import dev.supergooey.rewind.Dates.startMillis
+import dev.supergooey.rewind.ui.theme.Purple40
+import dev.supergooey.rewind.ui.theme.PurpleGrey40
+import dev.supergooey.rewind.ui.theme.PurpleGrey80
 import dev.supergooey.rewind.ui.theme.RewindTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -92,7 +106,7 @@ class MainActivity : ComponentActivity() {
       )
     }
     val state by model.value.state().collectAsState()
-
+    var screenWidth by remember { mutableFloatStateOf(0f) }
     val usageIntent = remember { Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS) }
     val permissionLauncher = rememberLauncherForActivityResult(
       contract = ActivityResultContracts.StartActivityForResult()
@@ -103,29 +117,46 @@ class MainActivity : ComponentActivity() {
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .background(color = Color.Black)
+        .background(color = PurpleGrey40)
     ) {
 
       if (state.usagePermissionGranted) {
-        val scrollState = rememberScrollState()
-        Row(
+        val listState = rememberLazyListState()
+        LazyRow(
           modifier = Modifier
             .fillMaxSize()
-            .horizontalScroll(scrollState),
+            .onSizeChanged { screenWidth = it.width.toFloat() },
+          state = listState,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          state.timeline.sessions.forEach { session ->
+          items(state.timeline.sessions) { session ->
             val seconds = session.duration.inWholeSeconds
-            val barWidth = maxOf(100, seconds).toInt()
-            Log.d("Session Timeline", "${session.start.app.label} : $seconds")
+            var focused by remember { mutableStateOf(false) }
+            val barWidth = maxOf(50, seconds).toInt()
+            val barHeight by animateDpAsState(
+              targetValue = if (focused) 24.dp else 12.dp,
+              animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessMedium
+              ),
+              label = "Selected Bar Height"
+            )
             Box(
-              modifier = Modifier.wrapContentSize(),
+              modifier = Modifier
+                .wrapContentSize()
+                .onGloballyPositioned { coords ->
+                  val center = screenWidth / 2f
+                  val bounds = coords.boundsInParent()
+                  val right = bounds.right
+                  val left = bounds.left
+                  focused = right > center && left < center
+                },
               contentAlignment = Alignment.Center
             ) {
               Box(
                 modifier = Modifier
                   .width(barWidth.dp)
-                  .height(12.dp)
+                  .height(barHeight)
                   .background(
                     color = Color(session.start.app.backgroundColor),
                     shape = CircleShape
@@ -137,6 +168,21 @@ class MainActivity : ComponentActivity() {
                 contentDescription = session.start.app.label
               )
             }
+          }
+          item {
+            Box(modifier = Modifier.fillParentMaxWidth(0.5f))
+          }
+        }
+        Box(
+          modifier = Modifier
+            .width(2.dp)
+            .height(80.dp)
+            .background(color = Color.White, shape = CircleShape)
+            .align(Alignment.Center)
+        )
+        LaunchedEffect(key1 = state.timeline.sessions) {
+          if (state.timeline.sessions.isNotEmpty()) {
+            listState.scrollToItem(state.timeline.sessions.lastIndex)
           }
         }
       } else {
@@ -235,10 +281,6 @@ class AppViewModel(
           appEvents.last().app.packageName != appEvent.app.packageName -> {
             val startEvent = appEvents.removeLast()
             val endEvent = startEvent.copy(timestamp = appEvent.timestamp)
-            Log.d(
-              "Events",
-              "Session Finished for ${startEvent.app.packageName}, and starting for ${appEvent.app.packageName}"
-            )
             val session = AppSession(
               start = startEvent,
               end = endEvent

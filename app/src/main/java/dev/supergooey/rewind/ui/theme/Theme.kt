@@ -51,7 +51,7 @@ fun RewindTheme(
   if (!view.isInEditMode) {
     SideEffect {
       val window = (view.context as Activity).window
-      window.statusBarColor = Color(0f, 0f, 0f, 0.7f).toArgb()
+      window.statusBarColor = Color(0f, 0f, 0f, 0f).toArgb()
       WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
     }
   }
